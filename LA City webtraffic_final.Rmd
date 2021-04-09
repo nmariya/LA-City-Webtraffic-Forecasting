@@ -1,0 +1,257 @@
+---
+title: "Project - 718"
+author: "Group 17"
+date: "4/16/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(forecast)
+library(fpp)
+library(gridExtra)
+```
+
+## Introduction
+Web sites must forecast Web page views in order to plan computer resource allocation, estimate upcoming revenue  and advertising growth (if website is for business), and to ensure secure, reliable and qualitative networking. This project aims to give a detailed step-by-step analysis of such a time series data, collected from the lacity.org website in an attempt to analyse its webtraffic pattern.
+
+Here we begin with Exploratory Data Analysis, which highlights some characteristics and components of our data, followed by fitting an appropiate model to finally forecasting and testing the model. 
+
+##Examining the data-set - EDA
+The data-set contains more than 8 million observations described by 6 variables. Starting from 01/01/2014 to 07/31/2019, we have the record for less than 6 years. This data frame contains the data on the number of visitors, number of sessions, bounce rate, date, browser information and the device category. The summary of the dataset is as follows:
+
+```{r echo=FALSE}
+#setwd("D:/Uwaterloo/718/Project")
+lacity<-read.csv("lacity.org-website-traffic.csv",header = TRUE)
+summary(lacity)
+```
+
+We are only concerned with the total number of unique visitors to the website and their respective dates. So, we pre-process the data frame to include the univariate predictor variable - "X..of.Visitors" and outcome variable - "Date". 
+We start by plotting the series and visually inspecting for any outliers.
+
+```{r echo=FALSE}
+traffic <- lacity %>% select(Date,Visitors=X..of.Visitors) 
+traffic$Date<-sapply(strsplit(as.character(traffic$Date), "T"), `[`, 1)
+traffic$Date<-as.Date(traffic$Date,format = "%Y-%m-%d")
+traffic<-aggregate(traffic$Visitors, by=list(Date=traffic$Date), FUN=sum)
+traffic<-traffic %>% select(Date,Visitors=x)
+summary(traffic)
+ggplot(traffic,aes(x=Date,y=Visitors)) + geom_point(color="red",alpha=0.2)
+```
+We know that we have incomplete data for 2019, so we use data from 2014-01-01 to 2018-12-31 further on by creating a time series object.
+Another assumption that we make here is, setting frequency as 365, despite the fact that 2016 is a leap year. We could possibly reason it as - becasue we aim to make forecasts on a daily basis, it wont affect our modeling.
+We split the data to train and test data where records after 01/01/2018 is used to test the model and the records from 01/01/2014 to 31/12/2017 is used in creating a model.
+```{r}
+#View(traffic)
+testdata<-traffic %>% filter(Date>="2018-01-01" & Date<"2019-01-01")
+traindata<-traffic %>% filter(Date<"2018-01-01")
+#View(testdata)
+t1<-ggplot(data=traindata,aes(x=Date,y=Visitors))+geom_line()+theme(axis.title.x = element_blank()) + labs(title = "Training Data")
+t2<-ggplot(data=testdata,aes(x=Date,y=Visitors))+geom_line()+theme(axis.title.x = element_blank()) + labs(title = "Testing Data")
+grid.arrange(t1, t2, ncol = 2)
+```
+We see that nearing the end of 2017, the number of visitors is unually high for 3-4 days. This could be observed as a suspected outlier, as it could be due to spammers attack. As this would bias our model we remove the outlier using the function: tsclean() which replaces the outlier using series smoothing and decomposition. 
+```{r}
+visitors_ts<-traindata %>% select(Visitors) %>%ts(start = c(2014, 01,01), frequency = 365)
+visitor.ts.clean<-visitors_ts %>% tsclean()
+visitors.ts.test<-testdata$Visitors %>% ts(start=c(2018,01,01),frequency=365)
+autoplot(visitor.ts.clean,color="blue",alpha=0.7)+autolayer(visitors.ts.test)
+```
+
+
+## Decomposition of Time Series into Components
+We start examining the series by first zooming in, then later visualizing a zoomed out variations. 
+Drilling down to more granular level i.e. Weekdays, we see that there is a Weekly cycle.
+```{r echo=FALSE}
+traindata$Weekday<-weekdays(traindata$Date)
+traindata$Weekday <- factor(traindata$Weekday, levels=c("Monday", "Tuesday", "Wednesday","Thursday","Friday","Saturday","Sunday"))
+ggplot(data=traindata[1:1200,],aes(x=Weekday,y=Visitors))+geom_boxplot(color="purple", alpha=0.2)+theme(axis.title.x = element_blank())
+```
+'lacity.org' is the government's official wesite. Mostly, visitors of the government websites are the government employees who might visit it as a part of their daily job and/or the general public who wants to apply or check updates on any kinds of government documents and/or those who involve in goverment-to-government buinesses. As the government offices' working hours are from Monday to Friday, we see a high web traffic on weekdays.  This could account for the following weekly pattern of the series.
+###Decomposition
+Further, we decompose the series to examine its components. A time series is made up of seasonality, trend, cycles and error. Seasonality refers to the fluctuations in the series in accordance with the calender cycle whereas trend is the overall increasing or decreasing trend of the series. A cycle occurs when the data exhibit rises and falls that are not of a fixed frequency. The error or randomness in a series is the uncorrelated data points contrary to the obvious correlated adjescent data points which accounts for the unexplained fluctuations in the series.
+
+This series seems additive in nature as we see that the variation in seasonal pattern is cyclic and does not increase or decrease as the trend vary. Also another seasonal component is weekly seasonality which we identified earlier. Thus we can say that the series is the sum of its components, trend, seasonality and randomness. 
+
+```{r echo=FALSE}
+plot(decompose(visitor.ts.clean, type="add"))
+```
+The trend does not show a constant increase or decrease, however it increases initially, fluctuates and then decreases for sometime, after which it increases linearly.
+
+We could sense a cyclic nature - that any two consecutive years have similar patterns, but years far apart seem to have different patterns.
+
+To avoid imposing of multiple seasonal patterns - i.e. weekly cycles and the yearly cycles, we average out the weekly cycles by using Moving average technique - a data smoothing technique, thus making the series more stable and predictable. Here, we take a period of 7 giving us a weekly moving average.
+```{r}
+autoplot(visitor.ts.clean, series="Data") +
+  autolayer(ma(visitor.ts.clean,7), series="7-MA") +
+  xlab("Year") + ylab("Visitors") +
+  ggtitle("Visitors per Day - Smoothened") +
+  scale_colour_manual(values=c("Data"="grey50","7-MA"="red"),
+                      breaks=c("Data","7-MA"))
+visitor.ts.smooth<-ma(visitor.ts.clean,7)
+visitor.ts.test.smooth<-ma(visitors.ts.test,7)
+```
+Now we try to decompose Smoothened series using STL, an acronym for “Seasonal and Trend decomposition using Loess”
+```{r}
+#plot(decompose(visitor.ts.smooth))
+
+na.omit(visitor.ts.smooth) %>%
+  mstl(t.window=365, robust=TRUE) %>%
+  autoplot()
+```
+This decomposition methods assumes that the seasonal component repeats from year to year, however we control the trend-cycle, which here we choose to be yearly(365).Decomposing the smoothened series gives almost the same trend , but seasonality can be better visualized.
+Hence, we conclude there is a seasonal effect with a varying trend.
+###Stationarity
+Owing to the fact, that there is some seasonality and variation in trend, we can say that the data is not stationary. The series that we have in our hand does not have its statistical properties same in the future as they have been in the past i.e. the mean and variance function are a function of time. 
+
+To further support our claim we check acf plots (correlogram) to see if there is any underlying pattern for trends or seasons. 
+```{r}
+visitor.ts.smooth<-na.omit(visitor.ts.smooth)
+ggAcf(visitor.ts.smooth)
+```
+The trend is shown as a slow decay and the sesonal spikes can be seen superimposed on the plot. Most of the correlation values are significant i.e. most of the values lie outside the dotted line which maps 5% significance level.
+
+Next we do some statistical test to confirm our claim that data is not stationary.
+1.ADF (Augmented Dickey Fuller) Test - Difference stationay test
+Null Hypothesis: The series has a unit root (value of a =1)(p>0)
+Alternate Hypothesis: The series has no unit root.(p=0)
+```{r}
+adf.test(visitor.ts.smooth)
+adf.test(visitor.ts.smooth,k=365)
+```
+The p-value is very less for short lags(<30) but not equal to zero. We could say for short periods our series is weakly stationary. However, our data has yearly trends so performing an augmented dickey-fuller test with lag=365 we see that p is not equal to zero(p=0.7593) which suggests that our time series data can be a non stationary data as it has a unit root. 
+
+2.KPSS (Kwiatkowski-Phillips-Schmidt-Shin) Test - Trend Stationary Test
+Null Hypothesis: The process is trend stationary.
+Alternate Hypothesis: The series has a unit root (series is not stationary).
+```{r}
+kpss.test(na.omit(visitor.ts.smooth))
+kpss.test(na.omit(visitor.ts.smooth),null="Trend")
+```
+The p-values are less than 0.01, hence we reject null hypothesis in favour of alternate hypothesis that our data is Non-stationary.
+Summing up from both the test, we can say that our data is non-stationary.
+
+##Fitting a model
+We know that our data is non-stationary and that it has varying trend and seasonal fluctuations. Hence, a valid reasoning would be to fit a non-stationary Time-Series model.
+
+###Random Walk(Naive) and Seasonal Naive models
+We begin with the most basic model for non-stationary stocastic process i.e. the Random walk - a non stationary series based on discrete white noise (DWN a function with mean zero and constant variance). It predicts the value at time t based on the sum of value at time t-1 and some value of DWN. We also know our data follows some seasonality so we incorporate a seasonal naive model as well.
+```{r}
+visitor.ts.smooth<-na.omit(visitor.ts.smooth)
+autoplot(visitor.ts.smooth) +
+  autolayer(rwf(visitor.ts.smooth,h=365),series="Random Walk - Naive", PI=FALSE)+
+  autolayer(snaive(visitor.ts.smooth,h=365),series="Seasonal Naive", PI=FALSE)+
+  ggtitle("Forecasts for daily visitor traffic for a Year") +
+  xlab("Year") + ylab("Numver of Visitors") +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+If the data is to follow a Random walk model, differencing the series with a lag of 1 should give white noise who's correlogram shows no significant correlation. 
+```{r}
+ggAcf(diff(na.omit(visitor.ts.smooth)))
+```
+From the acf plot, it can be seen that there are many significant correlations due to seasonality and varying trends, and the corellogram does not look that of a white noise. 
+For the snaive model, even though the forecast incorporates seasonality, when we perform residual analysis we see that the mean is not 0, there is heteroskedasticity and residuals do not follow normal distribution.
+```{r}
+checkresiduals(snaive(visitor.ts.smooth))
+```
+Thus, our model need more than incorporation of seasonality.
+
+###ARIMA models
+A non-stationary series can be differenced to form a stationary series and could be modeled using a stationary process by combining Auto-Regression and Moving Average processes. The resulting ARIMA process follows the model - ARIMA(p,d,q), which has 3 hyperparameters - P(auto regressive lags),d(order of differentiation),Q(moving avgerage) which respectively comes from the AR, I & MA components.
+To identify p,d,q first we plot acf and pacf correlograms and the point where correlation drops to zero in acf plot gives q value, in pacf plot gives q value and the order of the difference is d, to make the series stationary. We do a log transformation to average out the variance.
+```{r}
+acf(diff(log(visitor.ts.smooth),d=2))
+pacf(diff(log(visitor.ts.smooth),d=2))
+```
+In the acf plot, the value in x-axis where graph line drops to 0 in y-axis for 1st time is the q value, which is 2. In the pacf plot, following the same procedure, we get p value as 4. So we try to overfit and underfit some more models around the estimated p,d,q values and choose the model with least AIC.
+
+```{r}
+for(p in 3:5)
+{
+  for (q in 1:3)
+  {
+    fit<-arima(visitor.ts.smooth,order = c(p,1,q))
+    summary(fit)
+    fit<-arima(visitor.ts.smooth,order = c(p,2,q))
+    summary(fit)
+  }
+}
+```
+
+```{r}
+
+fit.arima<-arima(visitor.ts.smooth,order = c(5,1,3))
+
+checkresiduals(fit.arima)
+summary(fit.arima)
+plot(visitor.ts.smooth,col="red",ylab="Number of Visitors")
+lines(fitted(fit.arima),col="blue")
+legend(x="topright",y=0.92,legend=c("Actual values", "Predicted values"),col=c("blue", "red"), lty=1:1, cex=0.8)
+```
+
+We get ARIMA model with p=5,d=1 and q=3 with least AIC, MAPE and RMSE value - which we consider as the best fit.The residuals follow a constant mean of 0, a normal distribution and ACF plot shows an approximate white noise distribution with few significant correlations.
+To check there is no actual correlation we do a 
+The ARIMA process can be extended to include seasonal terms, giving a non-stationary seasonal ARIMA (SARIMA) process. As our data has some seasonality, to create the model, we are going to make use of auto.arima function. It has the capability to create multiple models with different p,d,q parameters and it then picks the model with the least AIC value. Since, we need a seasonal ARIMA model, we set D=1.
+```{r}
+fit.sarima<-auto.arima(visitor.ts.smooth,D=1)
+summary(fit.sarima)
+plot(fit.sarima$x,col="red",ylab="Number of Visitors")
+lines(fitted(fit.sarima),col="blue")
+legend(x="topright",y=0.92,legend=c("Actual values", "Predicted values"),col=c("blue", "red"), lty=1:1, cex=0.8)
+checkresiduals(fit.sarima)
+```
+The result is an SARIMA model with (p,d,q)=(5,1,1),(P,D,Q)=(0,1,0) and m=365. However the residuals do not follow the process of a White noise and do not seem to be normally distributed. This model is not a good fit for our data, even though our AIC value is less compared to the previous ARIMA(5,1,3) model.
+
+###Holt-Winters Seasonal model - Tripple Exponential modelling
+Our data does not have a constant linear trend i.e. the level of trend changes. For this we can use exponentially weighted moving averages to update estimates of the seasonally adjusted mean (called the level ), slope, and seasonals.
+
+```{r}
+hw.forecast.visitors<-HoltWinters(visitor.ts.smooth,seasonal = "add")
+plot(hw.forecast.visitors)
+plot(hw.forecast.visitors$fitted)
+checkresiduals(hw.forecast.visitors)
+summary(hw.forecast.visitors)
+Box.test(resid(hw.forecast.visitors))
+```
+The optimum values for the smoothing parameters, based on minimising
+the one-step ahead prediction errors, are 1, 0, and 1 for alpha, beta and gamma respectively. It follows that the level and seasonal variation adapt very rapidly whereas the trend does not. 
+The resuduals follow a normal distribution with high positive kurtosis, and is conditional heteroskedastic. The residuals also have a constant mean 0 and acf plot seems to follow the distribution of white noise roughly. To support the claim we carry out Ljung-Box Test with Null hypothesis as resuduals being independent and alternate hypothesis being residuals are not independent. The p-value is significantly low hence we can conclude the residuals follow a White Noise process and this model could be considered a good fit.
+
+##Forecasting
+Forecasting daily number of visitors from a dataset which contains 4 years of data can be tricky as it contains multiple seasonal cycles, despite the smoothening. It shoud also be noted that the extrapolated forecasts are based entirely on the trends in the period during which the model was fitted and would be a sensible prediction assuming these trends continue. 
+
+We use Holt-Winters model with alpha=1 and gamma=1 for forecasting long term predictions and  ARIMA(5,1,3) could be used for short term forecasts
+###Holt-Winters forecasting
+```{r}
+visitors.predict<-predict(hw.forecast.visitors,n.ahead =363)
+ts.plot(visitor.ts.smooth,visitors.predict,lty=1:2)
+visitors.predict<-ts(visitors.predict[-(1:4)],start = c(2018,01,01),frequency = 365)
+visitor.ts.test.smooth<-ts(visitor.ts.test.smooth,start = c(2018,01,01),frequency = 365)
+accuracy(visitor.ts.test.smooth,visitors.predict)
+plot(forecast(hw.forecast.visitors,h=365))
+```
+Our model has a MAPE value of 30.14, which means on average, the forecast is off by 30.14%.MAE is 668347.3 , to interpret this, we must consider the scale of our dataset. Average value for visitors in our dataset is 2836905. This means that on average our forecast is off by 23.6% which is reasonable.
+
+###ARIMA forecasting
+```{r}
+forecast.arima<-forecast(fit.sarima,h=365)
+plot(forecast.arima)
+accuracy(forecast.arima)
+```
+ARIMA models has a MAPE value of 1.23, which means on average, the forecast is off by 1.23%. A Model having MAPE value less than 20 is considered a good model.MASE is 0.05639078, our goal is to have a MASE value lesser than 1,and that we have achieved. MAE is 34695.49. This means that on average our forecast is off by 1.2% which is actually very good. However forecasting for 365 days give a constant value, which could be interpreted as ARIMA is better suited for short term forecasting as it captures short term fluctuations better.
+
+
+##Conclusion
+Our models only allow for regular seasonality, despite the fact that we have smoothened the data. Capturing seasonality associated with moving events such as Easter, Christmas, or the  New Year is more difficult. If our time-series were relatively short which captured a single seasonality our fitted models would have worked better, as it could be seen from the forecasts of ARIMA model. For long term Holt-winter's tripple exponential smoothening seems to be a better fit.
+
+##References
+Time Series Analysis and Its Applications With R Examples - by Robert. H. Shumway
+David S. Stoffer
+Forecasting: Principles and Practice - by Rob J Hyndman and George Athanasopoulos
+https://www.analyticsvidhya.com/blog/2018/09/non-stationary-time-series-python/
+https://machinelearningmastery.com/white-noise-time-series-python/
+https://towardsdatascience.com/the-complete-guide-to-time-series-analysis-and-forecasting-70d476bfe775
+

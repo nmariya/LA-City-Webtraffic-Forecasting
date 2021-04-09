@@ -1,5 +1,5 @@
 # LA-City-Webtraffic-Forecasting
-This project aims to give a detailed step-by-step analysis of the time series data, collected from the lacity.org website in an attempt to analyze its web traffic pattern.
+This project aims to give a detailed step-by-step analysis of the time series data, collected from the lacity.org website in an attempt to analyze its web traffic pattern. You can find the project [here](https://nmariya.github.io/LA-City-Webtraffic-Forecasting/).
 
 ## Analysis
 Here, we have come up with a descriptive analysis and a predictive model. Through the report we have addressed to the weekly cycle pattern and outliers observed in the data.
